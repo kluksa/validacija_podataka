@@ -44,6 +44,7 @@ status_agr<-function(statusi) {
 podacinox<-function(pocetak, kraj, postaja, usporedno=0) {
   komplist<-c("NO","NOx","NO2")
   obj<-podaci(pocetak, kraj, postaja, komplist, usporedno)
+  #treba dodati provjeru da svi imaju maksimalni status
   obj$noxkomponenta<-obj$komponenta
   obj$komponenta<-obj$komponenta[-3]
   class(obj)<-append(class(obj),"podataknox")
@@ -52,7 +53,17 @@ podacinox<-function(pocetak, kraj, postaja, usporedno=0) {
 
 podacipm<-function(pocetak, kraj, postaja, usporedno=0) {
   komplist<-c("PM10","PM2.5","PM1")
-  podaci(pocetak, kraj, postaja, komplist, usporedno)
+  obj<-podaci(pocetak, kraj, postaja, komplist, usporedno)
+  tmp<-obj$minutni$status.PM10[obj$minutni$status.PM10<obj$minutni$status.PM2.5,]
+  if ( length(tmp) > 0 ){
+    obj$minutni$status.PM10[obj$minutni$status.PM10<obj$minutni$status.PM2.5,] <-obj$minutni$status.PM2.5[obj$minutni$status.PM10<obj$minutni$status.PM2.5,]
+  }
+  tmp<-obj$minutni$status.PM10[obj$minutni$status.PM10>obj$minutni$status.PM2.5,]
+  if ( length(tmp) > 0 ){
+    obj$minutni$status.PM2.5[obj$minutni$status.PM10>obj$minutni$status.PM2.5,]<-obj$minutni$status.PM10[obj$minutni$status.PM10>obj$minutni$status.PM2.5,]
+  }
+    #treba dodati provjeru da svi imaju maksimalni status
+  obj
 }
 
 
@@ -177,6 +188,35 @@ broj_ispod_dl.podatak<-function(pod) {
   names(list)<-sapply(pod$komponenta, function(x) x$formula)
   list
 }
+
+dnevna_agregacija.podatak<-function (pod){
+  if ( !require(data.table) ) stop("Nije instaliran paket data.table")
+  niz<-as.POSIXct(seq(0,unclass(pod$kraj)[1]-unclass(pod$pocetak)[1], by=24*3600 ), origin=pod$pocetak)
+
+  niz<-zoo(niz, niz)
+  df<-merge(pod$satni, niz)
+  df$niz2<-na.locf(df$niz,fromLast=T)
+  ddt<-data.table(df)
+  agregiraj_komponentu<-function(k){
+    komp<-k$formula
+    f<-fn(komp)
+    tf<-ddt[,get(f('status'))]<OBUHVATFLAG
+    na<-!is.na(ddt[,get(f('status'))])
+    
+    jj<-ddt[na&tf,list(mean(get(f('vrijednost')),na.rm = F),sum(get(f('vrijednost')),na.rm = T),length(get(f('vrijednost')))), by='niz2']
+    ss<-ddt[na,status_agr(get(f('status'))),by='niz2']
+    dnevni<-merge(jj,ss, by='niz2')
+    names(dnevni)[-1]<-c(paste0('vrijednost.',komp),paste0('sum.',komp),paste0('n.',komp),paste0('status.',komp))
+    dnevni<-zoo(dnevni, as.POSIXct(dnevni$niz2,origin='1970-01-01'))
+    dnevni[dnevni[,f('n')]<13,f('status')] <- bitwOr(dnevni[dnevni[,f('n')]<13,f('status')],OBUHVATFLAG)
+    subset(dnevni,select=-c(niz2))
+  }
+  svi<-do.call(merge, lapply(pod$komponenta, agregiraj_komponentu))
+  pod$dnevni<-svi
+  pod  
+}
+
+
 
 agregiraj.podatak<-function(pod) {
   if ( !require(data.table) ) stop("Nije instaliran paket data.table")
